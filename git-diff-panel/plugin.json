@@ -1,0 +1,8 @@
+{
+  "id": "git-diff-panel",
+  "name": "Git Diff",
+  "version": "1.0.0",
+  "author": "local",
+  "description": "Claude가 파일을 수정할 때 git diff를 오른쪽 패널에 표시합니다",
+  "main": "index.js"
+}

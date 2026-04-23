@@ -1,1 +1,11 @@
-[]
+[
+  {
+    "id": "git-diff-panel",
+    "name": "Git Diff",
+    "description": "Claude가 파일을 수정할 때 git diff를 오른쪽 패널에 표시합니다",
+    "version": "1.0.0",
+    "author": "cw-frontend",
+    "repo": "cw-frontend/claude-code-manager-plugins",
+    "subdir": "git-diff-panel"
+  }
+]
