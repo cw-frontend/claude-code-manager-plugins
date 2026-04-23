@@ -23,14 +23,15 @@ function activate(api) {
     maxWidth: 700,
   })
 
-  // 세션 시작 시 현재 전체 diff 표시
+  // 세션 시작 시 현재 전체 diff: 변경사항 있으면 펼치고, 없으면 접어둠
   api.onHook('SessionStart', (event) => {
     const cwd = api.storage.get('lastCwd')
     if (!cwd) return
     const diff = getDiff(cwd, null)
-    api.updatePanel('diff', { type: 'diff', filePath: null, cwd, diff }, { open: true })
+    api.updatePanel('diff', { type: 'diff', filePath: null, cwd, diff }, { open: true, collapse: !diff })
   })
 
+  // Claude 파일 수정 후: 변경사항 있으면 펼치고, 없으면 접어둠
   api.onHook('PostToolUse', (event) => {
     const tool = event.tool_name
     if (!['Edit', 'Write', 'MultiEdit', 'Bash'].includes(tool)) return
@@ -39,11 +40,10 @@ function activate(api) {
     const cwd = filePath ? path.dirname(filePath) : (event.tool_input?.cwd || null)
     if (!cwd) return
 
-    // 마지막 cwd 저장 (SessionStart 시 재사용)
     api.storage.set('lastCwd', cwd)
 
     const diff = getDiff(cwd, filePath)
-    api.updatePanel('diff', { type: 'diff', filePath, cwd, diff }, { open: true })
+    api.updatePanel('diff', { type: 'diff', filePath, cwd, diff }, { open: true, collapse: !diff })
   })
 }
 
