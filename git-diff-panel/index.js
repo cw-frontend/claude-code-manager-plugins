@@ -59,13 +59,6 @@ function activate(api) {
     })
   }
 
-  // 세션 시작 시
-  api.onHook('SessionStart', () => {
-    const lastRepos = api.storage.get('lastRepos')
-    if (!Array.isArray(lastRepos)) return
-    for (const repoRoot of lastRepos) updateRepoDiff(repoRoot)
-  })
-
   // 활성 탭 전환 시
   api.onHook('ActiveSessionChanged', (event) => {
     const cwd = event.cwd
