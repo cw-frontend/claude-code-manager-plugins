@@ -1,0 +1,24 @@
+{
+  "id": "gdrive-panel",
+  "name": "Google Drive",
+  "version": "1.0.0",
+  "author": "yonghyun.lee@coway.com",
+  "description": "Google Drive 문서를 검색하고 Claude에게 참조로 전달합니다",
+  "main": "index.js",
+  "settings": [
+    {
+      "key": "client_id",
+      "label": "Client ID",
+      "type": "string",
+      "secret": false,
+      "description": "Google Cloud Console OAuth 2.0 Client ID"
+    },
+    {
+      "key": "client_secret",
+      "label": "Client Secret",
+      "type": "string",
+      "secret": true,
+      "description": "Google Cloud Console OAuth 2.0 Client Secret"
+    }
+  ]
+}
