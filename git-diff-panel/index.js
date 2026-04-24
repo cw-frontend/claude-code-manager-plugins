@@ -10,12 +10,14 @@ function getGitRoot(cwd) {
   } catch { return null }
 }
 
-/** repo 전체 diff (staged + unstaged 모두) */
+/** repo 전체 diff (staged + unstaged + untracked 파일 포함) */
 function getRepoDiff(repoRoot) {
   try {
-    const unstaged = execSync('git diff HEAD', { cwd: repoRoot, timeout: 5000 }).toString()
-    if (unstaged) return unstaged
-    return execSync('git diff --cached', { cwd: repoRoot, timeout: 5000 }).toString()
+    // untracked 파일을 intent-to-add로 스테이징해서 diff에 잡히게 함 (실제 스테이징 아님)
+    execSync('git add -N .', { cwd: repoRoot, timeout: 3000 })
+  } catch { /* 무시 */ }
+  try {
+    return execSync('git diff HEAD', { cwd: repoRoot, timeout: 5000 }).toString()
   } catch { return '' }
 }
 
@@ -55,7 +57,6 @@ function activate(api) {
     const diff = getRepoDiff(repoRoot)
     api.updatePanel(panelId, { type: 'diff', filePath: null, cwd: repoRoot, diff }, {
       open: true,
-      collapse: !diff,
     })
   }
 
