@@ -31,6 +31,15 @@ function activate(api) {
     api.updatePanel('diff', { type: 'diff', filePath: null, cwd, diff }, { open: true, collapse: !diff })
   })
 
+  // 활성 탭 전환 시 해당 세션의 cwd로 diff 갱신
+  api.onHook('ActiveSessionChanged', (event) => {
+    const cwd = event.cwd
+    if (!cwd) return
+    api.storage.set('lastCwd', cwd)
+    const diff = getDiff(cwd, null)
+    api.updatePanel('diff', { type: 'diff', filePath: null, cwd, diff }, { open: true, collapse: !diff })
+  })
+
   // Claude 파일 수정 후: 변경사항 있으면 펼치고, 없으면 접어둠
   api.onHook('PostToolUse', (event) => {
     const tool = event.tool_name
