@@ -19,7 +19,7 @@ function getRepoDiff(repoRoot) {
   } catch { return '' }
 }
 
-/** repoRoot → 안전한 패널 id (슬래시 등 특수문자 제거) */
+/** repoRoot → 안전한 패널 id */
 function repoToPanelId(repoRoot) {
   return 'diff::' + repoRoot.replace(/[^a-zA-Z0-9_-]/g, '_')
 }
@@ -30,7 +30,7 @@ function repoToTitle(repoRoot) {
 }
 
 function activate(api) {
-  // 등록된 repo root 추적
+  // 등록된 repo root 목록 (패널 id 계산용)
   const registeredRepos = new Set()
 
   function ensurePanel(repoRoot) {
@@ -50,36 +50,41 @@ function activate(api) {
     return panelId
   }
 
-  function updateRepoDiff(repoRoot, opts = {}) {
+  function updateRepoDiff(repoRoot) {
     const panelId = ensurePanel(repoRoot)
     const diff = getRepoDiff(repoRoot)
     api.updatePanel(panelId, { type: 'diff', filePath: null, cwd: repoRoot, diff }, {
-      open: opts.open ?? true,
-      collapse: opts.collapse ?? !diff,
+      open: true,
+      collapse: !diff,
     })
   }
 
-  // 활성 탭 전환 시
+  // 활성 탭 전환 시: 현재 세션 레포만 show, 나머지 hide
   api.onHook('ActiveSessionChanged', (event) => {
     const cwds = Array.isArray(event.cwds) ? event.cwds : (event.cwd ? [event.cwd] : [])
     if (cwds.length === 0) return
 
+    // 현재 세션의 repo root 목록
+    const activeRepos = new Set()
     for (const cwd of cwds) {
       const repoRoot = getGitRoot(cwd)
-      if (!repoRoot) continue
+      if (repoRoot) activeRepos.add(repoRoot)
+    }
 
-      let lastRepos = api.storage.get('lastRepos')
-      if (!Array.isArray(lastRepos)) lastRepos = []
-      if (!lastRepos.includes(repoRoot)) {
-        lastRepos = [repoRoot, ...lastRepos].slice(0, 10)
-        api.storage.set('lastRepos', lastRepos)
+    // 등록된 패널 중 현재 세션과 무관한 것은 hide
+    for (const repoRoot of registeredRepos) {
+      if (!activeRepos.has(repoRoot)) {
+        api.hidePanel(repoToPanelId(repoRoot))
       }
+    }
 
+    // 현재 세션 레포 diff 갱신 및 show
+    for (const repoRoot of activeRepos) {
       updateRepoDiff(repoRoot)
     }
   })
 
-  // 파일 수정 후
+  // 파일 수정 후: 해당 레포 diff만 갱신 (현재 세션 레포임이 보장됨)
   api.onHook('PostToolUse', (event) => {
     const tool = event.tool_name
     if (!['Edit', 'Write', 'MultiEdit', 'Bash'].includes(tool)) return
@@ -90,14 +95,6 @@ function activate(api) {
 
     const repoRoot = getGitRoot(rawCwd)
     if (!repoRoot) return
-
-    // 최근 repo 목록 갱신
-    let lastRepos = api.storage.get('lastRepos')
-    if (!Array.isArray(lastRepos)) lastRepos = []
-    if (!lastRepos.includes(repoRoot)) {
-      lastRepos = [repoRoot, ...lastRepos].slice(0, 10)
-      api.storage.set('lastRepos', lastRepos)
-    }
 
     updateRepoDiff(repoRoot)
   })
