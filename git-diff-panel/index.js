@@ -61,20 +61,22 @@ function activate(api) {
 
   // 활성 탭 전환 시
   api.onHook('ActiveSessionChanged', (event) => {
-    const cwd = event.cwd
-    if (!cwd) return
-    const repoRoot = getGitRoot(cwd)
-    if (!repoRoot) return
+    const cwds = Array.isArray(event.cwds) ? event.cwds : (event.cwd ? [event.cwd] : [])
+    if (cwds.length === 0) return
 
-    // 최근 repo 목록 저장 (최대 10개)
-    let lastRepos = api.storage.get('lastRepos')
-    if (!Array.isArray(lastRepos)) lastRepos = []
-    if (!lastRepos.includes(repoRoot)) {
-      lastRepos = [repoRoot, ...lastRepos].slice(0, 10)
-      api.storage.set('lastRepos', lastRepos)
+    for (const cwd of cwds) {
+      const repoRoot = getGitRoot(cwd)
+      if (!repoRoot) continue
+
+      let lastRepos = api.storage.get('lastRepos')
+      if (!Array.isArray(lastRepos)) lastRepos = []
+      if (!lastRepos.includes(repoRoot)) {
+        lastRepos = [repoRoot, ...lastRepos].slice(0, 10)
+        api.storage.set('lastRepos', lastRepos)
+      }
+
+      updateRepoDiff(repoRoot)
     }
-
-    updateRepoDiff(repoRoot)
   })
 
   // 파일 수정 후
