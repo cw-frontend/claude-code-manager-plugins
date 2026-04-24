@@ -2,7 +2,11 @@
 
 const http = require('http')
 const https = require('https')
+const fs = require('fs')
+const path = require('path')
 const { execSync } = require('child_process')
+
+const GDRIVE_TMP_DIR = '/tmp/claude-gdrive'
 
 // ─── OAuth2 설정 ──────────────────────────────────────────────────────────────
 
@@ -78,11 +82,18 @@ async function getValidToken(storage, clientId, clientSecret) {
 // ─── Google Drive API ────────────────────────────────────────────────────────
 
 async function searchFiles(token, query) {
-  const q = query
-    ? `name contains '${query.replace(/'/g, "\\'")}' and trashed=false`
-    : 'trashed=false'
+  let q
+  if (!query) {
+    q = 'trashed=false'
+  } else {
+    // 공백/언더스코어로 토큰 분리 후 각 토큰을 name contains AND 조건으로 검색
+    // fullText contains 는 내용까지 검색해 노이즈가 많으므로 name 기준 유지
+    const tokens = query.split(/[\s_]+/).filter(Boolean)
+    const nameConds = tokens.map((t) => `name contains '${t.replace(/'/g, "\\'")}'`).join(' and ')
+    q = `${nameConds} and trashed=false`
+  }
   const fields = 'files(id,name,mimeType,modifiedTime,webViewLink,size)'
-  const url = `${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&pageSize=30&orderBy=modifiedTime desc`
+  const url = `${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&pageSize=30&orderBy=modifiedTime desc&supportsAllDrives=true&includeItemsFromAllDrives=true`
 
   const res = await httpsRequest(url, {
     headers: { Authorization: `Bearer ${token}` },
@@ -139,11 +150,29 @@ function mimeToLabel(mimeType) {
     'application/vnd.google-apps.spreadsheet': 'Sheets',
     'application/vnd.google-apps.presentation': 'Slides',
     'application/vnd.google-apps.folder': 'Folder',
+    'application/vnd.google-apps.shortcut': 'Link',
     'application/pdf': 'PDF',
     'text/plain': 'Text',
-    'text/markdown': 'Markdown',
+    'text/markdown': 'MD',
+    'text/csv': 'CSV',
+    'application/json': 'JSON',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'DOCX',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'XLSX',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'PPTX',
+    'application/vnd.openxmlformats-officedocument.presentationml.slideshow': 'PPSX',
+    'application/msword': 'DOC',
+    'application/vnd.ms-excel': 'XLS',
+    'application/vnd.ms-powerpoint': 'PPT',
+    'image/png': 'PNG',
+    'image/jpeg': 'JPG',
+    'image/gif': 'GIF',
+    'image/svg+xml': 'SVG',
+    'application/zip': 'ZIP',
   }
-  return map[mimeType] || mimeType.split('/').pop()
+  if (map[mimeType]) return map[mimeType]
+  // 알 수 없는 타입은 확장자 부분만 대문자로 (최대 6자)
+  const ext = mimeType.split('/').pop().split('.').pop().toUpperCase()
+  return ext.length <= 6 ? ext : 'FILE'
 }
 
 function isReadable(mimeType) {
@@ -195,28 +224,23 @@ function activate(api) {
   // ── 파일 목록 렌더링 ───────────────────────────────────────
   function renderFileList(files, status = '') {
     currentFiles = files
-    const columns = [
-      { key: 'name', label: '파일명', width: 220 },
-      { key: 'type', label: '타입', width: 60 },
-      { key: 'modified', label: '수정일', width: 80 },
-      { key: 'action', label: '', width: 40 },
-    ]
     const rows = files.map((f) => ({
       _id: f.id,
       _mimeType: f.mimeType,
       _webViewLink: f.webViewLink,
-      name: f.name,
-      type: mimeToLabel(f.mimeType),
-      modified: f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString('ko-KR') : '-',
+      _title: f.name,
+      _badge: mimeToLabel(f.mimeType),
+      _meta: f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString('ko-KR') : '-',
       action: isReadable(f.mimeType) ? '참조' : '열기',
     }))
 
     api.updatePanel('file-list', {
       type: 'table',
-      columns,
+      columns: [],
       rows,
       status,
       sortable: false,
+      listMode: true,
     }, { open: true })
   }
 
@@ -317,14 +341,11 @@ function activate(api) {
   function showSetupGuide() {
     api.updatePanel('file-list', {
       type: 'table',
-      columns: [{ key: 'msg', label: 'Google Drive 설정', width: 380 }],
+      columns: [],
       rows: [
-        { _id: 'guide1', msg: '1. Google Cloud Console에서 OAuth 앱을 만드세요' },
-        { _id: 'guide2', msg: '2. 아래 storage.json에 client_id / client_secret 입력' },
-        { _id: 'guide3', msg: `3. 경로: ~/.claude-code-manager/plugins/gdrive-panel/storage.json` },
-        { _id: 'guide4', msg: '4. 플러그인 리로드 후 다시 시도하세요' },
+        { _id: 'open_settings', action: 'open_settings', _title: '🔑 Client ID / Secret 입력하기', _subtitle: 'Google Cloud Console OAuth 자격증명이 필요합니다' },
       ],
-      status: 'Client ID / Secret이 설정되지 않았습니다',
+      listMode: true,
     }, { open: true })
   }
 
@@ -332,6 +353,11 @@ function activate(api) {
   api.onHook('PluginAction', async (event) => {
     if (!event.pluginId || event.pluginId !== 'gdrive-panel') return
     const { action, rowId } = event
+
+    if (action === 'open_settings') {
+      api.requestSettings()
+      return
+    }
 
     if (action === 'search') {
       await loadFiles(event.query || '')
@@ -367,33 +393,40 @@ function activate(api) {
     const token = await getValidToken(storage, clientId, clientSecret)
     if (!token) { await startAuth(); return }
 
-    try {
-      api.updatePanel('preview', {
-        type: 'markdown',
-        content: `### ${file.name}\n\n불러오는 중...`,
-      }, { open: true })
+    // 로딩 상태 표시
+    renderFileList(currentFiles, `"${file.name}" 불러오는 중...`)
+    api.updatePanel('preview', {
+      type: 'markdown',
+      content: `### ${file.name}\n\n불러오는 중...`,
+    }, { open: true })
 
+    try {
       const content = await getFileContent(token, file.id, file.mimeType)
       const truncated = content.length > 20000 ? content.slice(0, 20000) + '\n\n...(내용이 잘렸습니다)' : content
 
       if (action === '참조') {
-        // PTY에 주입
-        const ref = `다음 문서를 참고해서 작업해줘.\n\n[Google Drive: ${file.name}]\n\`\`\`\n${truncated}\n\`\`\`\n`
-        api.ptyWrite(ref)
+        // /tmp/claude-gdrive/{파일명}.md 에 저장 후 @경로 전송
+        renderFileList(currentFiles, `"${file.name}" PTY 전송 중...`)
+        fs.mkdirSync(GDRIVE_TMP_DIR, { recursive: true })
+        const safeName = file.name.replace(/[/\\:*?"<>|]/g, '_')
+        const tmpPath = path.join(GDRIVE_TMP_DIR, `${safeName}.md`)
+        fs.writeFileSync(tmpPath, truncated, 'utf8')
+        api.ptyWrite(`@${tmpPath} 이 문서를 참고해줘\n`)
         api.notify(`"${file.name}" 참조 전송 완료`, 'info')
-        // 미리보기도 같이 표시
+        renderFileList(currentFiles, `"${file.name}" 전송 완료 ✅`)
         api.updatePanel('preview', {
           type: 'markdown',
-          content: `### ${file.name}\n\n> Claude에게 참조 전송 완료 ✅\n\n\`\`\`\n${truncated.slice(0, 3000)}${truncated.length > 3000 ? '\n...(미리보기 3000자)' : ''}\n\`\`\``,
+          content: `### ${file.name}\n\n> \`@${tmpPath}\` 전송 완료 ✅\n\n\`\`\`\n${truncated.slice(0, 3000)}${truncated.length > 3000 ? '\n...(미리보기 3000자)' : ''}\n\`\`\``,
         }, { open: true })
       } else {
-        // 미리보기만
+        renderFileList(currentFiles, '')
         api.updatePanel('preview', {
           type: 'markdown',
           content: `### ${file.name}\n\n\`\`\`\n${truncated}\n\`\`\``,
         }, { open: true })
       }
     } catch (err) {
+      renderFileList(currentFiles, `오류: ${err.message}`)
       api.notify('파일 읽기 오류: ' + err.message, 'error')
     }
   })
@@ -414,9 +447,9 @@ function activate(api) {
   } else {
     api.updatePanel('file-list', {
       type: 'table',
-      columns: [{ key: 'msg', label: 'Google Drive', width: 300 }],
-      rows: [{ _id: 'auth', msg: '🔐 Google 계정 연결이 필요합니다' }],
-      status: '행을 클릭하면 브라우저에서 로그인합니다',
+      columns: [],
+      rows: [{ _id: 'auth', action: 'auth', _title: '🔐 Google 계정 연결이 필요합니다', _subtitle: '클릭하면 브라우저에서 로그인합니다' }],
+      listMode: true,
     }, { open: true })
   }
 }
