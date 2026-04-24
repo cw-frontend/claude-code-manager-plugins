@@ -104,12 +104,24 @@ async function searchFiles(token, query) {
 
 async function getFileContent(token, fileId, mimeType) {
   // Google Docs/Sheets/Slides → 텍스트로 export
+  // Office 파일(DOCX/XLSX/PPTX) → Google 형식으로 변환 후 텍스트 export
   let url
   if (mimeType === 'application/vnd.google-apps.document') {
     url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/plain`
   } else if (mimeType === 'application/vnd.google-apps.spreadsheet') {
     url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/csv`
   } else if (mimeType === 'application/vnd.google-apps.presentation') {
+    url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/plain`
+  } else if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+    url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/plain`
+  } else if (
+    mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  ) {
+    url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/csv`
+  } else if (
+    mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
+    mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.slideshow'
+  ) {
     url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/plain`
   } else {
     // 일반 파일 다운로드 (텍스트 계열)
@@ -182,6 +194,10 @@ function isReadable(mimeType) {
     'application/vnd.google-apps.presentation',
     'text/plain', 'text/markdown', 'text/csv',
     'application/json',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'application/vnd.openxmlformats-officedocument.presentationml.slideshow',
   ].includes(mimeType)
 }
 
