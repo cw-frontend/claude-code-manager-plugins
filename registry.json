@@ -4,8 +4,17 @@
     "name": "Git Diff",
     "description": "Claude가 파일을 수정할 때 git diff를 오른쪽 패널에 표시합니다",
     "version": "1.0.0",
-    "author": "cw-frontend",
+    "author": "yonghyun.lee@coway.com",
     "repo": "cw-frontend/claude-code-manager-plugins",
     "subdir": "git-diff-panel"
+  },
+  {
+    "id": "gdrive-panel",
+    "name": "Google Drive",
+    "description": "Google Drive 문서를 검색하고 Claude에게 참조로 전달합니다",
+    "version": "1.0.0",
+    "author": "yonghyun.lee@coway.com",
+    "repo": "cw-frontend/claude-code-manager-plugins",
+    "subdir": "gdrive-panel"
   }
 ]
