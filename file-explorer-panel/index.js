@@ -88,7 +88,8 @@ return function FileExplorer({ data, onAction }) {
 
   function handleRefresh() { onAction('refresh', { cwd: current && current.cwd }) }
   function handleNodeClick(node) {
-    onAction(node.isDir ? 'expand' : 'open', { id: node.id, cwd: current && current.cwd })
+    if (!node.isDir) return
+    onAction('expand', { id: node.id, cwd: current && current.cwd })
   }
   function handleDragStart(e, node) {
     if (node.isDir) { e.preventDefault(); return }
@@ -260,8 +261,6 @@ function activate(api) {
         state.expandedDirs.add(nodeId)
       }
       flushPanel()
-    } else if (action === 'open') {
-      api.ptyWrite(`@${nodeId} `)
     }
   })
 }
