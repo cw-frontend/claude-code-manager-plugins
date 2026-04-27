@@ -10,25 +10,13 @@ const EXCLUDE = new Set([
   'vendor', '.DS_Store', 'Thumbs.db',
 ])
 
-/** cwd → 패널 id */
-function cwdToPanelId(cwd) {
-  return 'explorer::' + cwd.replace(/[^a-zA-Z0-9_-]/g, '_')
-}
-
-/** cwd → 패널 타이틀 */
-function cwdToTitle(cwd) {
-  return path.basename(cwd)
-}
+const PANEL_ID = 'explorer'
 
 function buildTree(dirPath, expandedDirs) {
-  function readDir(dirPath, depth) {
+  function readDir(dir, depth) {
     const nodes = []
     let entries
-    try {
-      entries = fs.readdirSync(dirPath, { withFileTypes: true })
-    } catch {
-      return nodes
-    }
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return nodes }
 
     const filtered = entries
       .filter((e) => !EXCLUDE.has(e.name) && !e.name.startsWith('.'))
@@ -39,12 +27,10 @@ function buildTree(dirPath, expandedDirs) {
 
     for (const e of filtered) {
       const isDir = e.isDirectory()
-      const fullPath = path.join(dirPath, e.name)
+      const fullPath = path.join(dir, e.name)
       const isExpanded = expandedDirs.has(fullPath)
       const node = { id: fullPath, name: e.name, isDir, isExpanded, depth, children: null }
-      if (isDir && isExpanded) {
-        node.children = readDir(fullPath, depth + 1)
-      }
+      if (isDir && isExpanded) node.children = readDir(fullPath, depth + 1)
       nodes.push(node)
     }
     return nodes
@@ -52,9 +38,9 @@ function buildTree(dirPath, expandedDirs) {
   return readDir(dirPath, 0)
 }
 
-/** renderFn: new Function('React','useState','useEffect','useRef','useMemo', body) → returns (data, onAction) => JSX */
+// ─── Render Function ──────────────────────────────────────────────────────────
+
 const RENDER_FN = /* js */`
-// ── 아이콘 SVG (inline) ────────────────────────────────────────────────────
 function SvgIcon({ d, color, size }) {
   return React.createElement('svg', {
     width: size || 13, height: size || 13, viewBox: '0 0 24 24',
@@ -82,42 +68,27 @@ function fileIcon(name, isDir, isExpanded) {
   return { d: ICON_FILE, color: '#666688' }
 }
 
-// ── 노드 평탄화 ────────────────────────────────────────────────────────────
 function flattenTree(nodes, result) {
   if (!nodes) return
   for (const node of nodes) {
     result.push(node)
-    if (node.isDir && node.isExpanded && node.children) {
-      flattenTree(node.children, result)
-    }
+    if (node.isDir && node.isExpanded && node.children) flattenTree(node.children, result)
   }
 }
 
-// ── 메인 컴포넌트 ──────────────────────────────────────────────────────────
 return function FileExplorer({ data, onAction }) {
-  const tree = data && data.tree ? data.tree : []
-  const cwd = data && data.cwd ? data.cwd : ''
+  const projects = data && data.projects ? data.projects : []
+  const [activeIdx, setActiveIdx] = useState(0)
+
+  // projects가 바뀌면 activeIdx가 범위를 벗어나지 않도록 보정
+  const safeIdx = projects.length === 0 ? 0 : Math.min(activeIdx, projects.length - 1)
+  const current = projects[safeIdx] || null
   const flat = []
-  flattenTree(tree, flat)
+  if (current) flattenTree(current.tree, flat)
 
-  const containerStyle = {
-    flex: 1, overflowY: 'auto', overflowX: 'hidden',
-    fontFamily: "-apple-system, 'Segoe UI', sans-serif",
-    fontSize: '12px',
-  }
-
-  const headerStyle = {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '4px 8px 4px 10px',
-    borderBottom: '1px solid #2a2a3a',
-    flexShrink: 0,
-  }
-
-  const cwdLabel = cwd ? cwd.split('/').pop() : ''
-
-  function handleRefresh() { onAction('refresh') }
+  function handleRefresh() { onAction('refresh', { cwd: current && current.cwd }) }
   function handleNodeClick(node) {
-    onAction(node.isDir ? 'expand' : 'open', { id: node.id })
+    onAction(node.isDir ? 'expand' : 'open', { id: node.id, cwd: current && current.cwd })
   }
   function handleDragStart(e, node) {
     if (node.isDir) { e.preventDefault(); return }
@@ -126,30 +97,64 @@ return function FileExplorer({ data, onAction }) {
   }
 
   return React.createElement('div', { style: { flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' } },
-    // 헤더
-    React.createElement('div', { style: headerStyle },
+
+    // ── 탭바 (프로젝트 2개 이상일 때만 표시) ──────────────────────────────
+    projects.length > 1 && React.createElement('div', {
+      style: {
+        display: 'flex', alignItems: 'stretch', flexShrink: 0,
+        borderBottom: '1px solid #2a2a3a', overflowX: 'auto',
+        msOverflowStyle: 'none',
+      }
+    },
+      projects.map((proj, i) =>
+        React.createElement('button', {
+          key: proj.cwd,
+          onClick: () => setActiveIdx(i),
+          title: proj.cwd,
+          style: {
+            padding: '4px 10px', border: 'none', cursor: 'pointer',
+            fontSize: '11px', fontWeight: safeIdx === i ? 600 : 400,
+            color: safeIdx === i ? '#ccccee' : '#555577',
+            background: safeIdx === i ? '#1e1e30' : 'transparent',
+            borderBottom: safeIdx === i ? '2px solid #8251EE' : '2px solid transparent',
+            whiteSpace: 'nowrap', flexShrink: 0,
+            transition: 'color 120ms, background 120ms',
+          },
+          onMouseEnter: (e) => { if (safeIdx !== i) e.currentTarget.style.color = '#9999cc' },
+          onMouseLeave: (e) => { if (safeIdx !== i) e.currentTarget.style.color = '#555577' },
+        }, proj.cwd.split('/').pop())
+      )
+    ),
+
+    // ── 헤더 (현재 프로젝트명 + 새로고침) ────────────────────────────────
+    React.createElement('div', {
+      style: {
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '4px 8px 4px 10px', borderBottom: '1px solid #2a2a3a', flexShrink: 0,
+      }
+    },
       React.createElement('span', {
         style: { fontSize: '10px', fontWeight: 600, color: '#6666aa', textTransform: 'uppercase', letterSpacing: '0.06em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }
-      }, cwdLabel || 'Explorer'),
+      }, current ? current.cwd.split('/').pop() : 'Explorer'),
       React.createElement('button', {
         onClick: handleRefresh,
         title: '새로고침',
-        style: {
-          background: 'none', border: 'none', cursor: 'pointer',
-          color: '#6666aa', display: 'flex', padding: '2px', borderRadius: '3px',
-        },
+        style: { background: 'none', border: 'none', cursor: 'pointer', color: '#6666aa', display: 'flex', padding: '2px', borderRadius: '3px' },
         onMouseEnter: (e) => { e.currentTarget.style.color = '#9999cc'; e.currentTarget.style.background = '#2a2a3a' },
         onMouseLeave: (e) => { e.currentTarget.style.color = '#6666aa'; e.currentTarget.style.background = 'none' },
       },
         React.createElement(SvgIcon, { d: ICON_REFRESH, size: 12 })
       )
     ),
-    // 트리
-    React.createElement('div', { style: containerStyle },
+
+    // ── 파일 트리 ─────────────────────────────────────────────────────────
+    React.createElement('div', {
+      style: { flex: 1, overflowY: 'auto', overflowX: 'hidden', fontFamily: "-apple-system, 'Segoe UI', sans-serif", fontSize: '12px' }
+    },
       flat.length === 0
         ? React.createElement('div', {
             style: { textAlign: 'center', padding: '16px', color: '#44445a', fontSize: '11px' }
-          }, cwd ? '파일 없음' : '세션을 시작하세요')
+          }, current ? '파일 없음' : '세션을 시작하세요')
         : flat.map((node) => {
             const iconInfo = fileIcon(node.name, node.isDir, node.isExpanded)
             const paddingLeft = 10 + node.depth * 16
@@ -168,21 +173,12 @@ return function FileExplorer({ data, onAction }) {
               onMouseEnter: (e) => { e.currentTarget.style.background = '#1e1e30' },
               onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent' },
             },
-              // 폴더 chevron (파일은 빈 공간)
               node.isDir
-                ? React.createElement(SvgIcon, {
-                    d: node.isExpanded ? ICON_CHEVRON_DOWN : ICON_CHEVRON_RIGHT,
-                    color: '#555577', size: 10,
-                  })
+                ? React.createElement(SvgIcon, { d: node.isExpanded ? ICON_CHEVRON_DOWN : ICON_CHEVRON_RIGHT, color: '#555577', size: 10 })
                 : React.createElement('span', { style: { width: 10, flexShrink: 0 } }),
-              // 파일/폴더 아이콘
               React.createElement(SvgIcon, { d: iconInfo.d, color: iconInfo.color, size: 13 }),
-              // 이름
               React.createElement('span', {
-                style: {
-                  color: node.isDir ? '#ccccee' : '#aaaacc',
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
-                }
+                style: { color: node.isDir ? '#ccccee' : '#aaaacc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }
               }, node.name)
             )
           })
@@ -191,76 +187,69 @@ return function FileExplorer({ data, onAction }) {
 }
 `
 
-function activate(api) {
-  const registeredCwds = new Set()
-  const cwdState = new Map() // cwd → { expandedDirs: Set }
+// ─── activate ─────────────────────────────────────────────────────────────────
 
-  function ensurePanel(cwd) {
-    const panelId = cwdToPanelId(cwd)
-    if (!registeredCwds.has(cwd)) {
-      registeredCwds.add(cwd)
-      cwdState.set(cwd, { expandedDirs: new Set() })
-      api.registerPanel({
-        id: panelId,
-        type: 'custom',
-        title: cwdToTitle(cwd),
-        icon: 'folder',
-        defaultWidth: 280,
-        minWidth: 200,
-        maxWidth: 600,
-        renderFn: RENDER_FN,
-      })
-    }
-    return panelId
+function activate(api) {
+  // cwd → { expandedDirs: Set }
+  const cwdState = new Map()
+  let currentCwds = []
+
+  // 패널 1개만 등록 (고정 id)
+  api.registerPanel({
+    id: PANEL_ID,
+    type: 'custom',
+    title: 'Explorer',
+    icon: 'folder',
+    defaultWidth: 280,
+    minWidth: 200,
+    maxWidth: 600,
+    renderFn: RENDER_FN,
+  })
+
+  function getOrCreateState(cwd) {
+    if (!cwdState.has(cwd)) cwdState.set(cwd, { expandedDirs: new Set() })
+    return cwdState.get(cwd)
   }
 
-  function flushPanel(cwd) {
-    const panelId = cwdToPanelId(cwd)
-    const state = cwdState.get(cwd)
-    if (!state) return
-    const tree = buildTree(cwd, state.expandedDirs)
-    api.updatePanel(panelId, { type: 'custom', data: { tree, cwd } }, {})
+  function flushPanel() {
+    const projects = currentCwds.map((cwd) => {
+      const state = getOrCreateState(cwd)
+      return { cwd, tree: buildTree(cwd, state.expandedDirs) }
+    })
+    api.updatePanel(PANEL_ID, { type: 'custom', data: { projects } }, {})
   }
 
   api.onHook('ActiveSessionChanged', (event) => {
     const cwds = Array.isArray(event.cwds) ? event.cwds : (event.cwd ? [event.cwd] : [])
     if (cwds.length === 0) return
 
-    const activeCwds = new Set(cwds)
+    currentCwds = cwds
+    // 새 cwd는 state 초기화
+    for (const cwd of cwds) getOrCreateState(cwd)
 
-    for (const cwd of registeredCwds) {
-      if (!activeCwds.has(cwd)) {
-        api.hidePanel(cwdToPanelId(cwd))
-      }
-    }
-
-    for (const cwd of cwds) {
-      ensurePanel(cwd)
-      api.showPanel(cwdToPanelId(cwd))
-      flushPanel(cwd)
-    }
+    api.showPanel(PANEL_ID)
+    flushPanel()
   })
 
   api.onHook('PluginAction', (event) => {
     if (event.pluginId !== 'file-explorer-panel') return
 
-    const cwd = Array.from(registeredCwds).find(
-      (c) => cwdToPanelId(c) === event.panelId
-    )
+    const { action, payload } = event
+    // payload.cwd로 어느 프로젝트인지 특정
+    const cwd = payload && payload.cwd ? payload.cwd : currentCwds[0]
     if (!cwd) return
 
-    const state = cwdState.get(cwd)
-    if (!state) return
+    const state = getOrCreateState(cwd)
 
-    if (event.action === 'refresh') {
-      flushPanel(cwd)
+    if (action === 'refresh') {
+      flushPanel()
       return
     }
 
-    const nodeId = event.payload && event.payload.id ? event.payload.id : event.rowId
+    const nodeId = payload && payload.id ? payload.id : event.rowId
     if (!nodeId) return
 
-    if (event.action === 'expand') {
+    if (action === 'expand') {
       if (state.expandedDirs.has(nodeId)) {
         const toDelete = []
         for (const p of state.expandedDirs) {
@@ -270,8 +259,8 @@ function activate(api) {
       } else {
         state.expandedDirs.add(nodeId)
       }
-      flushPanel(cwd)
-    } else if (event.action === 'open') {
+      flushPanel()
+    } else if (action === 'open') {
       api.ptyWrite(`@${nodeId} `)
     }
   })
