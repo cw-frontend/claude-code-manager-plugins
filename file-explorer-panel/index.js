@@ -104,20 +104,26 @@ function activate(api) {
     return rows
   }
 
-  function flushPanel(cwd, open) {
+  function flushPanel(cwd) {
     const panelId = cwdToPanelId(cwd)
     const state = cwdState.get(cwd)
     if (!state) return
     const rows = buildRows(cwd, 0, state.expandedDirs)
+    // 새로고침 액션 행을 맨 위에 추가
+    const refreshRow = {
+      _id: '__refresh__',
+      _title: '새로고침',
+      _icon: 'refresh',
+      action: 'refresh',
+      _depth: '0',
+    }
     api.updatePanel(panelId, {
       type: 'table',
-      columns: [
-        { key: '_title', label: 'Name' },
-      ],
-      rows,
+      columns: [{ key: '_title', label: 'Name' }],
+      rows: [refreshRow, ...rows],
       listMode: true,
       status: cwdToTitle(cwd),
-    }, open ? { open: true } : {})
+    }, {})
   }
 
   // 세션 전환: 현재 세션 cwd 패널만 show, 나머지 hide
@@ -137,31 +143,8 @@ function activate(api) {
     // 활성 cwd 패널 갱신 및 show
     for (const cwd of cwds) {
       ensurePanel(cwd)
-      flushPanel(cwd, true)
-    }
-  })
-
-  // 파일 수정 후 현재 활성 패널 갱신
-  api.onHook('PostToolUse', (event) => {
-    const tool = event.tool_name
-    if (!['Read', 'Write', 'Edit', 'MultiEdit', 'Bash'].includes(tool)) return
-
-    const filePath = event.tool_input?.file_path || null
-    const rawCwd = filePath ? path.dirname(filePath) : (event.tool_input?.cwd || null)
-
-    if (rawCwd) {
-      // 해당 파일이 속한 등록된 cwd 찾기
-      for (const cwd of registeredCwds) {
-        if (rawCwd.startsWith(cwd)) {
-          flushPanel(cwd, false)
-          break
-        }
-      }
-    } else {
-      // cwd 모를 때 등록된 모든 패널 갱신
-      for (const cwd of registeredCwds) {
-        flushPanel(cwd, false)
-      }
+      api.showPanel(cwdToPanelId(cwd))
+      flushPanel(cwd)
     }
   })
 
@@ -181,6 +164,11 @@ function activate(api) {
     const fullPath = event.rowId
     if (!fullPath) return
 
+    if (event.action === 'refresh') {
+      flushPanel(cwd)
+      return
+    }
+
     if (event.action === 'expand') {
       if (state.expandedDirs.has(fullPath)) {
         for (const p of state.expandedDirs) {
@@ -191,9 +179,10 @@ function activate(api) {
       } else {
         state.expandedDirs.add(fullPath)
       }
-      flushPanel(cwd, false)
+      flushPanel(cwd)
     } else if (event.action === 'open') {
-      api.notify(path.relative(cwd, fullPath), 'info')
+      // 파일 경로를 pty에 @참조로 전송
+      api.ptyWrite(`@${fullPath} `)
     }
   })
 }
