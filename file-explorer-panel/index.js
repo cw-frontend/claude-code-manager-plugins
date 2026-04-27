@@ -81,14 +81,20 @@ function activate(api) {
     id: PANEL_ID,
     type: 'table',
     title: 'File Explorer',
-    icon: 'file-text',
+    icon: 'folder',
     defaultWidth: 280,
     minWidth: 200,
     maxWidth: 600,
   })
 
-  // 설치 즉시 아이콘바에 표시
-  api.showPanel(PANEL_ID)
+  // 설치 즉시 아이콘바에 표시 (세션 연결 전엔 빈 안내 메시지)
+  api.updatePanel(PANEL_ID, {
+    type: 'table',
+    columns: [{ key: '_title', label: 'Name' }],
+    rows: [{ _title: '세션을 시작하면 파일 트리가 표시됩니다.' }],
+    listMode: true,
+    status: '',
+  }, { open: true })
 
   // rows를 패널에 반영
   function flush(open) {
