@@ -13,58 +13,27 @@ const EXCLUDE = new Set([
   'vendor', '.DS_Store', 'Thumbs.db',
 ])
 
-// 파일 이름 → 이모지
-function fileIcon(name, isDir) {
-  if (isDir) return '📁'
+// 파일 확장자 → lucide 아이콘 이름
+function fileIconName(name, isDir, isExpanded) {
+  if (isDir) return isExpanded ? 'folder-open' : 'folder'
   const ext = path.extname(name).toLowerCase()
   const icons = {
-    '.ts': '📘', '.tsx': '📘', '.js': '📙', '.jsx': '📙',
-    '.json': '📋', '.md': '📝', '.mdx': '📝',
-    '.css': '🎨', '.scss': '🎨', '.less': '🎨',
-    '.html': '🌐', '.vue': '💚', '.svelte': '🔥',
-    '.py': '🐍', '.rb': '💎', '.go': '🐹', '.rs': '🦀',
-    '.java': '☕', '.kt': '🟣', '.swift': '🍎',
-    '.sh': '⚙️', '.bash': '⚙️', '.zsh': '⚙️',
-    '.yml': '📐', '.yaml': '📐', '.toml': '📐', '.env': '🔐',
-    '.png': '🖼️', '.jpg': '🖼️', '.jpeg': '🖼️', '.gif': '🖼️', '.svg': '🖼️',
-    '.mp4': '🎬', '.mp3': '🎵',
-    '.zip': '📦', '.tar': '📦', '.gz': '📦',
-    '.pdf': '📕', '.lock': '🔒',
+    '.ts': 'file-code', '.tsx': 'file-code', '.js': 'file-code', '.jsx': 'file-code',
+    '.mts': 'file-code', '.cts': 'file-code', '.mjs': 'file-code', '.cjs': 'file-code',
+    '.json': 'file-json', '.jsonc': 'file-json',
+    '.md': 'file-type', '.mdx': 'file-type', '.txt': 'file-type',
+    '.css': 'file-code', '.scss': 'file-code', '.less': 'file-code',
+    '.html': 'globe', '.vue': 'file-code', '.svelte': 'file-code',
+    '.py': 'file-code', '.rb': 'file-code', '.go': 'file-code', '.rs': 'file-code',
+    '.java': 'file-code', '.kt': 'file-code', '.swift': 'file-code',
+    '.sh': 'terminal', '.bash': 'terminal', '.zsh': 'terminal',
+    '.yml': 'settings', '.yaml': 'settings', '.toml': 'settings', '.env': 'settings',
+    '.png': 'image', '.jpg': 'image', '.jpeg': 'image', '.gif': 'image',
+    '.svg': 'image', '.webp': 'image', '.ico': 'image',
+    '.zip': 'package', '.tar': 'package', '.gz': 'package',
+    '.lock': 'settings',
   }
-  return icons[ext] ?? '📄'
-}
-
-// 디렉터리 내용을 읽어 rows 배열로 반환
-// prefix: 들여쓰기 문자열, parentPath: 절대 경로
-function readDir(dirPath, prefix) {
-  let entries
-  try {
-    entries = fs.readdirSync(dirPath, { withFileTypes: true })
-  } catch {
-    return []
-  }
-
-  // 제외 항목 필터링, 숨김파일 제외, 디렉터리 우선 정렬
-  const filtered = entries
-    .filter((e) => !EXCLUDE.has(e.name) && !e.name.startsWith('.'))
-    .sort((a, b) => {
-      if (a.isDirectory() === b.isDirectory()) return a.name.localeCompare(b.name)
-      return a.isDirectory() ? -1 : 1
-    })
-
-  return filtered.map((e) => {
-    const isDir = e.isDirectory()
-    const fullPath = path.join(dirPath, e.name)
-    return {
-      _id: fullPath,
-      _title: prefix + fileIcon(e.name, isDir) + ' ' + e.name,
-      _badge: isDir ? 'dir' : path.extname(e.name).slice(1) || 'file',
-      action: isDir ? 'expand' : 'open',
-      // 접힌 상태 추적용 (렌더링엔 안 보임)
-      _isDir: isDir ? 'true' : 'false',
-      _depth: (prefix.length / 2).toString(),
-    }
-  })
+  return icons[ext] ?? 'file'
 }
 
 function activate(api) {
@@ -136,14 +105,13 @@ function activate(api) {
       const isDir = e.isDirectory()
       const fullPath = path.join(dirPath, e.name)
       const isExpanded = expandedDirs.has(fullPath)
-      const expandMark = isDir ? (isExpanded ? '▾ ' : '▸ ') : '  '
+      const expandMark = isDir ? (isExpanded ? '▾ ' : '▸ ') : ''
 
       rows.push({
         _id: fullPath,
-        _title: expandMark + fileIcon(e.name, isDir) + ' ' + e.name,
-        _badge: isDir ? (isExpanded ? 'open' : 'dir') : (path.extname(e.name).slice(1) || 'file'),
+        _title: expandMark + e.name,
+        _icon: fileIconName(e.name, isDir, isExpanded),
         action: isDir ? 'expand' : 'open',
-        _isDir: isDir ? 'true' : 'false',
         _depth: depth.toString(),
       })
 
