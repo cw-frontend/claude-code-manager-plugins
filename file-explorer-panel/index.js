@@ -119,6 +119,11 @@ return function FileExplorer({ data, onAction }) {
   function handleNodeClick(node) {
     onAction(node.isDir ? 'expand' : 'open', { id: node.id })
   }
+  function handleDragStart(e, node) {
+    if (node.isDir) { e.preventDefault(); return }
+    e.dataTransfer.effectAllowed = 'copy'
+    e.dataTransfer.setData('text/plain', '@' + node.id + ' ')
+  }
 
   return React.createElement('div', { style: { flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' } },
     // 헤더
@@ -150,12 +155,15 @@ return function FileExplorer({ data, onAction }) {
             const paddingLeft = 10 + node.depth * 16
             return React.createElement('div', {
               key: node.id,
+              draggable: !node.isDir,
               onClick: () => handleNodeClick(node),
+              onDragStart: (e) => handleDragStart(e, node),
+              title: node.isDir ? node.name : node.id + ' (터미널에 드래그하여 참조)',
               style: {
                 display: 'flex', alignItems: 'center', gap: '5px',
                 paddingTop: '2px', paddingBottom: '2px',
                 paddingLeft: paddingLeft + 'px', paddingRight: '8px',
-                cursor: 'pointer', userSelect: 'none',
+                cursor: node.isDir ? 'pointer' : 'grab', userSelect: 'none',
               },
               onMouseEnter: (e) => { e.currentTarget.style.background = '#1e1e30' },
               onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent' },
