@@ -92,12 +92,17 @@ function activate(api) {
 
     const filePath = event.tool_input?.file_path || null
     const rawCwd = filePath ? path.dirname(filePath) : (event.tool_input?.cwd || null)
-    if (!rawCwd) return
 
-    const repoRoot = getGitRoot(rawCwd)
-    if (!repoRoot) return
-
-    updateRepoDiff(repoRoot)
+    if (rawCwd) {
+      // cwd를 알 수 있으면 해당 레포만 갱신
+      const repoRoot = getGitRoot(rawCwd)
+      if (repoRoot) updateRepoDiff(repoRoot)
+    } else {
+      // Bash처럼 cwd가 없는 경우 — 등록된 모든 레포 갱신
+      for (const repoRoot of registeredRepos) {
+        updateRepoDiff(repoRoot)
+      }
+    }
   })
 }
 
