@@ -87,6 +87,9 @@ function activate(api) {
     maxWidth: 600,
   })
 
+  // 설치 즉시 아이콘바에 표시
+  api.showPanel(PANEL_ID)
+
   // rows를 패널에 반영
   function flush(open) {
     api.updatePanel(PANEL_ID, {
