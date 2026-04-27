@@ -255,9 +255,9 @@ function activate(api) {
       try {
         const stat = fs.statSync(nodeId)
         const content = stat.size > MAX_FILE_SIZE ? null : fs.readFileSync(nodeId, 'utf8')
-        api.showModal(nodeId, content)
+        api.showFilePreview(nodeId, content)
       } catch {
-        api.showModal(nodeId, '파일을 읽을 수 없습니다.')
+        api.showFilePreview(nodeId, '파일을 읽을 수 없습니다.')
       }
       return
     }
