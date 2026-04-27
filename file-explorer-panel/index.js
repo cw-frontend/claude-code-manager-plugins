@@ -87,13 +87,13 @@ function activate(api) {
     maxWidth: 600,
   })
 
-  // 설치 즉시 아이콘바에 표시 (세션 연결 전엔 빈 안내 메시지)
+  // 설치 즉시 아이콘바에 표시
   api.updatePanel(PANEL_ID, {
     type: 'table',
     columns: [{ key: '_title', label: 'Name' }],
-    rows: [{ _title: '세션을 시작하면 파일 트리가 표시됩니다.' }],
+    rows: [],
     listMode: true,
-    status: '',
+    status: '세션을 시작하면 파일 트리가 표시됩니다',
   }, { open: true })
 
   // rows를 패널에 반영
