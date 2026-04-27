@@ -10,7 +10,6 @@ const GDRIVE_TMP_DIR = '/tmp/claude-gdrive'
 
 // ─── OAuth2 설정 ──────────────────────────────────────────────────────────────
 
-// CLIENT_ID / CLIENT_SECRET 은 코드에 없음 — storage에서 읽어옴
 const REDIRECT_PORT = 9234
 const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/oauth2callback`
 const SCOPES = [
@@ -86,7 +85,6 @@ async function searchFiles(token, query) {
   if (!query) {
     q = 'trashed=false'
   } else {
-    // 공백/언더스코어로 토큰 분리 후 각 토큰을 name contains AND 조건으로 검색
     const tokens = query.split(/[\s_]+/).filter(Boolean)
     const nameConds = tokens.map((t) => `name contains '${t.replace(/'/g, "\\'")}'`).join(' and ')
     q = `${nameConds} and trashed=false`
@@ -101,27 +99,15 @@ async function searchFiles(token, query) {
   return res.body.files || []
 }
 
-async function getFileContent(token, fileId, mimeType) {
-  // Google Docs/Sheets/Slides → 텍스트로 export
-  // Office 파일(DOCX/XLSX/PPTX) → Google 형식으로 변환 후 텍스트 export
+async function downloadFile(token, fileId, mimeType, fileName) {
   let url
   if (mimeType === 'application/vnd.google-apps.document') {
-    url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/plain`
+    url = `${DRIVE_API}/files/${fileId}/export?mimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document`
   } else if (mimeType === 'application/vnd.google-apps.spreadsheet') {
-    url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/csv`
+    url = `${DRIVE_API}/files/${fileId}/export?mimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
   } else if (mimeType === 'application/vnd.google-apps.presentation') {
-    url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/plain`
-  } else if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-    url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/plain`
-  } else if (mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
-    url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/csv`
-  } else if (
-    mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
-    mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.slideshow'
-  ) {
-    url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/plain`
+    url = `${DRIVE_API}/files/${fileId}/export?mimeType=application/vnd.openxmlformats-officedocument.presentationml.presentation`
   } else {
-    // 일반 파일 다운로드 (텍스트 계열)
     url = `${DRIVE_API}/files/${fileId}?alt=media`
   }
 
@@ -132,10 +118,53 @@ async function getFileContent(token, fileId, mimeType) {
       path: urlObj.pathname + urlObj.search,
       headers: { Authorization: `Bearer ${token}` },
     }, (res) => {
-      // 리다이렉트 처리
       if (res.statusCode === 302 || res.statusCode === 303) {
         const loc = res.headers.location
-        https.get(loc, { headers: { Authorization: `Bearer ${token}` } }, (r2) => {
+        https.get(loc, (r2) => {
+          const chunks = []
+          r2.on('data', (c) => chunks.push(c))
+          r2.on('end', () => resolve(Buffer.concat(chunks)))
+        }).on('error', reject)
+        return
+      }
+      const chunks = []
+      res.on('data', (chunk) => chunks.push(chunk))
+      res.on('end', () => resolve(Buffer.concat(chunks)))
+    })
+    req.on('error', reject)
+    req.end()
+  })
+}
+
+async function exportAsText(token, fileId, mimeType) {
+  let url
+  if (mimeType === 'application/vnd.google-apps.document') {
+    url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/plain`
+  } else if (mimeType === 'application/vnd.google-apps.spreadsheet') {
+    url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/csv`
+  } else if (mimeType === 'application/vnd.google-apps.presentation') {
+    url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/plain`
+  } else if ([
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'application/vnd.openxmlformats-officedocument.presentationml.slideshow',
+  ].includes(mimeType)) {
+    url = `${DRIVE_API}/files/${fileId}/export?mimeType=text/plain`
+  } else {
+    url = `${DRIVE_API}/files/${fileId}?alt=media`
+  }
+
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url)
+    const req = https.request({
+      hostname: urlObj.hostname,
+      path: urlObj.pathname + urlObj.search,
+      headers: { Authorization: `Bearer ${token}` },
+    }, (res) => {
+      if (res.statusCode === 302 || res.statusCode === 303) {
+        const loc = res.headers.location
+        https.get(loc, (r2) => {
           let d = ''
           r2.on('data', (c) => { d += c })
           r2.on('end', () => resolve(d))
@@ -183,7 +212,7 @@ function mimeToLabel(mimeType) {
   return ext.length <= 6 ? ext : 'FILE'
 }
 
-function isReadable(mimeType) {
+function isTextExportable(mimeType) {
   return [
     'application/vnd.google-apps.document',
     'application/vnd.google-apps.spreadsheet',
@@ -197,34 +226,59 @@ function isReadable(mimeType) {
   ].includes(mimeType)
 }
 
-// ─── Render Functions ─────────────────────────────────────────────────────────
+// ─── Render Function ──────────────────────────────────────────────────────────
 
 const FILE_LIST_RENDER_FN = /* js */`
 return function GDriveFileList({ data, onAction }) {
   const files = data && data.files ? data.files : []
   const status = data && data.status ? data.status : ''
+  const dragReadyFileId = data && data.dragReadyFileId ? data.dragReadyFileId : null
+  const dragReadyPath = data && data.dragReadyPath ? data.dragReadyPath : null
   const [searchQuery, setSearchQuery] = useState('')
+  const [ctxMenu, setCtxMenu] = useState(null) // { fileIdx, x, y }
+
+  // 외부 클릭 시 컨텍스트 메뉴 닫기
+  useEffect(() => {
+    if (!ctxMenu) return
+    const handler = () => setCtxMenu(null)
+    window.addEventListener('click', handler)
+    return () => window.removeEventListener('click', handler)
+  }, [ctxMenu])
+
+  // dragReadyPath가 준비되면 해당 파일 드래그 시작 알림 (실제 드래그는 사용자가 다시 드래그)
+  useEffect(() => {
+    if (dragReadyPath && dragReadyFileId) {
+      // 이미 드래그 이벤트 내에서 처리되므로 별도 작업 불필요
+    }
+  }, [dragReadyPath, dragReadyFileId])
+
+  function handleContextMenu(e, file) {
+    e.preventDefault()
+    e.stopPropagation()
+    setCtxMenu({ file, x: e.clientX, y: e.clientY })
+  }
+
+  function handleDragStart(e, file) {
+    if (dragReadyPath && dragReadyFileId === file.id) {
+      e.dataTransfer.effectAllowed = 'copy'
+      e.dataTransfer.setData('text/plain', '@' + dragReadyPath + ' ')
+    } else {
+      // 텍스트 변환이 아직 안 된 경우 — 준비 요청
+      e.preventDefault()
+      onAction('prepare_drag', { id: file.id, mimeType: file.mimeType, name: file.name })
+    }
+  }
 
   const containerStyle = {
     flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column',
     fontFamily: "-apple-system, 'Segoe UI', sans-serif",
   }
-  const searchBarStyle = {
-    display: 'flex', gap: '6px', padding: '6px 8px',
-    borderBottom: '1px solid #2a2a3a', flexShrink: 0,
-  }
-  const statusStyle = {
-    padding: '3px 10px', fontSize: '10px', color: '#555577',
-    borderBottom: '1px solid #1e1e2e', flexShrink: 0,
-  }
-  const centerStyle = {
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    height: '80px', color: '#44445a', fontSize: '12px',
-  }
 
   return React.createElement('div', { style: containerStyle },
     // 검색바
-    React.createElement('div', { style: searchBarStyle },
+    React.createElement('div', {
+      style: { display: 'flex', gap: '6px', padding: '6px 8px', borderBottom: '1px solid #2a2a3a', flexShrink: 0 }
+    },
       React.createElement('input', {
         value: searchQuery,
         onChange: (e) => setSearchQuery(e.target.value),
@@ -237,54 +291,52 @@ return function GDriveFileList({ data, onAction }) {
       }),
       React.createElement('button', {
         onClick: () => onAction('search', { query: searchQuery }),
-        style: {
-          background: '#2a2a3a', border: '1px solid #3a3a4a', borderRadius: '4px',
-          color: '#8888aa', fontSize: '11px', padding: '3px 8px', cursor: 'pointer',
-        },
+        style: { background: '#2a2a3a', border: '1px solid #3a3a4a', borderRadius: '4px', color: '#8888aa', fontSize: '11px', padding: '3px 8px', cursor: 'pointer' },
       }, '검색'),
       React.createElement('button', {
-        onClick: () => onAction('auth'),
-        title: '재인증',
-        style: {
-          background: 'none', border: '1px solid #3a3a4a', borderRadius: '4px',
-          color: '#555577', fontSize: '10px', padding: '3px 6px', cursor: 'pointer',
-        },
+        onClick: () => onAction('auth'), title: '재인증',
+        style: { background: 'none', border: '1px solid #3a3a4a', borderRadius: '4px', color: '#555577', fontSize: '10px', padding: '3px 6px', cursor: 'pointer' },
       }, '🔄'),
       React.createElement('button', {
-        onClick: () => onAction('logout'),
-        title: '로그아웃',
-        style: {
-          background: 'none', border: '1px solid #3a3a4a', borderRadius: '4px',
-          color: '#555577', fontSize: '10px', padding: '3px 6px', cursor: 'pointer',
-        },
+        onClick: () => onAction('logout'), title: '로그아웃',
+        style: { background: 'none', border: '1px solid #3a3a4a', borderRadius: '4px', color: '#555577', fontSize: '10px', padding: '3px 6px', cursor: 'pointer' },
       }, '⏏')
     ),
     // 상태 표시
-    status && React.createElement('div', { style: statusStyle }, status),
+    status && React.createElement('div', {
+      style: { padding: '3px 10px', fontSize: '10px', color: '#555577', borderBottom: '1px solid #1e1e2e', flexShrink: 0 }
+    }, status),
     // 파일 목록
-    React.createElement('div', { style: { flex: 1, overflowY: 'auto', overflowX: 'hidden' } },
+    React.createElement('div', { style: { flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative' } },
       files.length === 0
-        ? React.createElement('div', { style: centerStyle }, status ? '' : '결과 없음')
+        ? React.createElement('div', {
+            style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '80px', color: '#44445a', fontSize: '12px' }
+          }, status ? '' : '결과 없음')
         : files.map((file, i) =>
             React.createElement('div', {
               key: file.id || i,
-              onClick: () => onAction(file.action || 'click', { id: file.id, mimeType: file.mimeType }),
+              draggable: !!file.id && file.action !== 'open_settings' && file.action !== 'auth',
+              onContextMenu: (e) => { if (file.id && file.action !== 'open_settings' && file.action !== 'auth') handleContextMenu(e, file) },
+              onClick: () => {
+                if (file.action === 'open_settings') { onAction('open_settings'); return }
+                if (file.action === 'auth') { onAction('auth'); return }
+              },
+              onDragStart: (e) => {
+                if (!file.id || file.action === 'open_settings' || file.action === 'auth') return
+                handleDragStart(e, file)
+              },
+              title: file.id ? '우클릭으로 메뉴 열기 | 드래그로 터미널 참조' : file.name,
               style: {
                 display: 'flex', alignItems: 'center', gap: '6px',
-                padding: '5px 10px', cursor: 'pointer',
+                padding: '5px 10px',
+                cursor: (file.action === 'open_settings' || file.action === 'auth') ? 'pointer' : 'grab',
               },
               onMouseEnter: (e) => { e.currentTarget.style.background = '#1e1e30' },
               onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent' },
             },
-              // 배지
               React.createElement('span', {
-                style: {
-                  fontSize: '9px', padding: '1px 5px', borderRadius: '3px',
-                  background: '#2a2a3a', color: '#6666aa', fontWeight: 600,
-                  letterSpacing: '0.03em', flexShrink: 0,
-                }
+                style: { fontSize: '9px', padding: '1px 5px', borderRadius: '3px', background: '#2a2a3a', color: '#6666aa', fontWeight: 600, letterSpacing: '0.03em', flexShrink: 0 }
               }, file.badge || 'FILE'),
-              // 파일명 + 날짜
               React.createElement('div', { style: { flex: 1, minWidth: 0 } },
                 React.createElement('div', {
                   style: { fontSize: '12px', color: '#ccccee', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
@@ -295,56 +347,32 @@ return function GDriveFileList({ data, onAction }) {
               )
             )
           )
+    ),
+    // 컨텍스트 메뉴
+    ctxMenu && React.createElement('div', {
+      onClick: (e) => e.stopPropagation(),
+      style: {
+        position: 'fixed', left: ctxMenu.x, top: ctxMenu.y,
+        background: '#1e1e30', border: '1px solid #2a2a3a', borderRadius: '6px',
+        boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+        zIndex: 999, minWidth: '160px', overflow: 'hidden',
+        fontFamily: "-apple-system, 'Segoe UI', sans-serif",
+      }
+    },
+      [
+        { label: '🔗 링크 열기', action: 'open_link' },
+        { label: '⬇️ 다운로드', action: 'download' },
+        ctxMenu.file.textExportable && { label: '📋 터미널에 참조', action: 'attach' },
+      ].filter(Boolean).map((item) =>
+        React.createElement('div', {
+          key: item.action,
+          onClick: () => { onAction(item.action, { id: ctxMenu.file.id, mimeType: ctxMenu.file.mimeType, name: ctxMenu.file.name }); setCtxMenu(null) },
+          style: { padding: '7px 14px', fontSize: '12px', color: '#ccccee', cursor: 'pointer' },
+          onMouseEnter: (e) => { e.currentTarget.style.background = '#2a2a3a' },
+          onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent' },
+        }, item.label)
+      )
     )
-  )
-}
-`
-
-const PREVIEW_RENDER_FN = /* js */`
-return function GDrivePreview({ data, onAction }) {
-  const content = data && data.content ? data.content : ''
-  const title = data && data.title ? data.title : ''
-
-  const bottomRef = React.useRef(null)
-  useEffect(() => {
-    if (data && data.scrollToBottom && bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: 'smooth' })
-    }
-  }, [content])
-
-  // 간단한 마크다운 렌더링
-  const lines = content.split('\\n')
-  let inCode = false
-  const elements = []
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (line.startsWith('\`\`\`')) { inCode = !inCode; continue }
-    if (inCode) {
-      elements.push(React.createElement('div', {
-        key: i,
-        style: { fontFamily: "'SF Mono', Menlo, monospace", color: '#aaaacc', whiteSpace: 'pre', background: '#1e1e2e', padding: '0 10px' }
-      }, line))
-      continue
-    }
-    if (line.startsWith('### ')) {
-      elements.push(React.createElement('div', { key: i, style: { color: '#ccccee', fontWeight: 600, fontSize: '12px', padding: '8px 10px 2px' } }, line.slice(4)))
-    } else if (line.startsWith('## ')) {
-      elements.push(React.createElement('div', { key: i, style: { color: '#ddddff', fontWeight: 700, fontSize: '13px', padding: '10px 10px 2px', borderBottom: '1px solid #2a2a3a' } }, line.slice(3)))
-    } else if (line.startsWith('# ')) {
-      elements.push(React.createElement('div', { key: i, style: { color: '#eeeeff', fontWeight: 700, fontSize: '14px', padding: '10px 10px 4px', borderBottom: '1px solid #2a2a3a' } }, line.slice(2)))
-    } else if (line.startsWith('- ') || line.startsWith('* ')) {
-      elements.push(React.createElement('div', { key: i, style: { color: '#aaaacc', padding: '1px 10px 1px 20px', fontSize: '11px' } }, '• ' + line.slice(2)))
-    } else if (line.trim() === '') {
-      elements.push(React.createElement('div', { key: i, style: { height: '6px' } }))
-    } else {
-      elements.push(React.createElement('div', { key: i, style: { color: '#aaaacc', padding: '1px 10px', fontSize: '11px', lineHeight: '1.6' } }, line))
-    }
-  }
-
-  return React.createElement('div', { style: { flex: 1, overflow: 'auto', padding: '4px 0' } },
-    ...elements,
-    React.createElement('div', { ref: bottomRef })
   )
 }
 `
@@ -353,20 +381,19 @@ return function GDrivePreview({ data, onAction }) {
 
 let oauthServer = null
 let currentFiles = []
+let currentPanelData = { files: [], status: '', dragReadyFileId: null, dragReadyPath: null }
 
 // ─── activate ────────────────────────────────────────────────────────────────
 
 function activate(api) {
   const { storage } = api
 
-  // ── Client ID / Secret은 storage에서 읽음 ─────────────────
   function getCredentials() {
     const clientId = storage.get('client_id')
     const clientSecret = storage.get('client_secret')
     return { clientId, clientSecret }
   }
 
-  // ── 패널 등록 ──────────────────────────────────────────────
   api.registerPanel({
     id: 'file-list',
     type: 'custom',
@@ -377,18 +404,7 @@ function activate(api) {
     renderFn: FILE_LIST_RENDER_FN,
   })
 
-  api.registerPanel({
-    id: 'preview',
-    type: 'custom',
-    title: 'Drive 문서 미리보기',
-    defaultWidth: 500,
-    minWidth: 300,
-    maxWidth: 900,
-    renderFn: PREVIEW_RENDER_FN,
-  })
-
-  // ── 파일 목록 렌더링 ───────────────────────────────────────
-  function renderFileList(files, status = '') {
+  function renderFileList(files, status = '', extras = {}) {
     currentFiles = files
     const fileRows = files.map((f) => ({
       id: f.id,
@@ -397,37 +413,29 @@ function activate(api) {
       webViewLink: f.webViewLink,
       badge: mimeToLabel(f.mimeType),
       meta: f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString('ko-KR') : '-',
-      action: isReadable(f.mimeType) ? '참조' : '열기',
+      textExportable: isTextExportable(f.mimeType),
     }))
-
-    api.updatePanel('file-list', {
-      type: 'custom',
-      data: { files: fileRows, status },
-    }, { open: true })
+    currentPanelData = { files: fileRows, status, ...extras }
+    api.updatePanel('file-list', { type: 'custom', data: currentPanelData }, { open: true })
   }
 
-  // ── 인증 플로우 ────────────────────────────────────────────
   async function startAuth() {
     const { clientId, clientSecret } = getCredentials()
-    if (!clientId || !clientSecret) {
-      showSetupGuide()
-      return
-    }
+    if (!clientId || !clientSecret) { showSetupGuide(); return }
 
     renderFileList([], '인증 진행 중...')
     if (oauthServer) { try { oauthServer.close() } catch {} }
 
-    const redirectUri = `http://localhost:${REDIRECT_PORT}/oauth2callback`
     const authUrl = `${AUTH_URL}?` + new URLSearchParams({
       client_id: clientId,
-      redirect_uri: redirectUri,
+      redirect_uri: REDIRECT_URI,
       response_type: 'code',
       scope: SCOPES,
       access_type: 'offline',
       prompt: 'consent',
     }).toString()
 
-    try { execFileSync('open', [authUrl]) } catch { api.notify('브라우저를 열 수 없습니다: ' + authUrl, 'error'); return }
+    try { execFileSync('open', [authUrl]) } catch { api.notify('브라우저를 열 수 없습니다', 'error'); return }
 
     oauthServer = http.createServer(async (req, res) => {
       const url = new URL(req.url, `http://localhost:${REDIRECT_PORT}`)
@@ -438,23 +446,17 @@ function activate(api) {
 
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       res.end('<html><body><h2>✅ 인증 완료!</h2><p>이 창을 닫고 앱으로 돌아가세요.</p></body></html>')
-      oauthServer.close()
-      oauthServer = null
+      oauthServer.close(); oauthServer = null
 
       try {
         const body = new URLSearchParams({
-          code,
-          client_id: clientId,
-          client_secret: clientSecret,
-          redirect_uri: redirectUri,
-          grant_type: 'authorization_code',
+          code, client_id: clientId, client_secret: clientSecret,
+          redirect_uri: REDIRECT_URI, grant_type: 'authorization_code',
         }).toString()
-
         const tokenRes = await httpsRequest(TOKEN_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) },
         }, body)
-
         if (tokenRes.status === 200 && tokenRes.body.access_token) {
           const expiresAt = Date.now() + (tokenRes.body.expires_in - 60) * 1000
           storage.set('access_token', tokenRes.body.access_token)
@@ -471,26 +473,20 @@ function activate(api) {
         renderFileList([], '인증 오류')
       }
     })
-
     oauthServer.listen(REDIRECT_PORT)
   }
 
-  // ── 파일 로드 ──────────────────────────────────────────────
   async function loadFiles(query) {
     const { clientId, clientSecret } = getCredentials()
     const token = await getValidToken(storage, clientId, clientSecret)
-    if (!token) {
-      await startAuth()
-      return
-    }
+    if (!token) { await startAuth(); return }
     try {
       renderFileList([], query ? `"${query}" 검색 중...` : '로딩 중...')
       const files = await searchFiles(token, query)
       renderFileList(files, files.length === 0 ? '결과 없음' : '')
     } catch (err) {
       if (err.message.includes('401')) {
-        storage.set('access_token', null)
-        storage.set('expires_at', 0)
+        storage.set('access_token', null); storage.set('expires_at', 0)
         await startAuth()
       } else {
         api.notify('파일 로드 오류: ' + err.message, 'error')
@@ -499,42 +495,25 @@ function activate(api) {
     }
   }
 
-  // ── 설정 안내 화면 ─────────────────────────────────────────
   function showSetupGuide() {
-    api.updatePanel('file-list', {
-      type: 'custom',
-      data: {
-        files: [{ id: 'open_settings', name: '🔑 Client ID / Secret 입력하기', badge: 'SET', meta: 'Google Cloud Console OAuth 자격증명이 필요합니다', action: 'open_settings' }],
-        status: '',
-      },
-    }, { open: true })
+    currentFiles = []
+    currentPanelData = {
+      files: [{ id: 'open_settings', name: '🔑 Client ID / Secret 입력하기', badge: 'SET', meta: 'Google Cloud Console OAuth 자격증명이 필요합니다', action: 'open_settings' }],
+      status: '',
+    }
+    api.updatePanel('file-list', { type: 'custom', data: currentPanelData }, { open: true })
   }
 
-  // ── 행 클릭 처리 ───────────────────────────────────────────
   api.onHook('PluginAction', async (event) => {
     if (!event.pluginId || event.pluginId !== 'gdrive-panel') return
     const { action, payload } = event
     const fileId = payload && payload.id ? payload.id : event.rowId
 
-    if (action === 'open_settings') {
-      api.requestSettings()
-      return
-    }
-
-    if (action === 'search') {
-      await loadFiles((payload && payload.query) || '')
-      return
-    }
-
-    if (action === 'auth') {
-      await startAuth()
-      return
-    }
-
+    if (action === 'open_settings') { api.requestSettings(); return }
+    if (action === 'search') { await loadFiles((payload && payload.query) || ''); return }
+    if (action === 'auth') { await startAuth(); return }
     if (action === 'logout') {
-      storage.set('access_token', null)
-      storage.set('refresh_token', null)
-      storage.set('expires_at', 0)
+      storage.set('access_token', null); storage.set('refresh_token', null); storage.set('expires_at', 0)
       renderFileList([], '로그아웃됨')
       api.notify('Google Drive 로그아웃', 'info')
       return
@@ -544,63 +523,74 @@ function activate(api) {
     const file = currentFiles.find((f) => f.id === fileId)
     if (!file) return
 
-    if (!isReadable(file.mimeType)) {
-      // 브라우저에서 열기 (execFileSync로 쉘 인젝션 방어)
-      try { execFileSync('open', [file.webViewLink]) } catch {}
-      return
-    }
-
-    // 파일 내용 읽기
     const { clientId, clientSecret } = getCredentials()
     const token = await getValidToken(storage, clientId, clientSecret)
     if (!token) { await startAuth(); return }
 
-    // 로딩 상태 표시
-    renderFileList(currentFiles, `"${file.name}" 불러오는 중...`)
-    api.updatePanel('preview', {
-      type: 'custom',
-      data: { title: file.name, content: `### ${file.name}\n\n불러오는 중...` },
-    }, { open: true })
+    if (action === 'open_link') {
+      if (file.webViewLink) { try { execFileSync('open', [file.webViewLink]) } catch {} }
+      return
+    }
 
-    try {
-      const content = await getFileContent(token, file.id, file.mimeType)
-      const truncated = content.length > 20000 ? content.slice(0, 20000) + '\n\n...(내용이 잘렸습니다)' : content
+    if (action === 'download') {
+      try {
+        renderFileList(currentFiles, `"${file.name}" 다운로드 중...`)
+        const buf = await downloadFile(token, file.id, file.mimeType, file.name)
+        const safeName = file.name.replace(/[/\\:*?"<>|]/g, '_')
+        const dlDir = require('os').homedir() + '/Downloads'
+        const dlPath = path.join(dlDir, safeName)
+        fs.writeFileSync(dlPath, buf)
+        api.notify(`"${file.name}" 다운로드 완료 → ~/Downloads`, 'info')
+        renderFileList(currentFiles, '')
+      } catch (err) {
+        api.notify('다운로드 오류: ' + err.message, 'error')
+        renderFileList(currentFiles, '오류 발생')
+      }
+      return
+    }
 
-      if (action === '참조') {
-        renderFileList(currentFiles, `"${file.name}" PTY 전송 중...`)
+    if (action === 'attach') {
+      try {
+        renderFileList(currentFiles, `"${file.name}" 준비 중...`)
+        const content = await exportAsText(token, file.id, file.mimeType)
+        const truncated = content.length > 20000 ? content.slice(0, 20000) + '\n\n...(내용이 잘렸습니다)' : content
         fs.mkdirSync(GDRIVE_TMP_DIR, { recursive: true })
         const safeName = file.name.replace(/[/\\:*?"<>|]/g, '_')
         const tmpPath = path.join(GDRIVE_TMP_DIR, `${safeName}.md`)
         fs.writeFileSync(tmpPath, truncated, 'utf8')
-        api.ptyWrite(`@${tmpPath} 이 문서를 참고해줘\n`)
-        api.notify(`"${file.name}" 참조 전송 완료`, 'info')
-        renderFileList(currentFiles, `"${file.name}" 전송 완료 ✅`)
-        api.updatePanel('preview', {
-          type: 'custom',
-          data: {
-            title: file.name,
-            content: `### ${file.name}\n\n> \`@${tmpPath}\` 전송 완료 ✅\n\n\`\`\`\n${truncated.slice(0, 3000)}${truncated.length > 3000 ? '\n...(미리보기 3000자)' : ''}\n\`\`\``,
-          },
-        }, { open: true })
-      } else {
+        api.ptyWrite(`@${tmpPath} `)
+        api.notify(`"${file.name}" 터미널에 참조 추가`, 'info')
         renderFileList(currentFiles, '')
-        api.updatePanel('preview', {
-          type: 'custom',
-          data: { title: file.name, content: `### ${file.name}\n\n\`\`\`\n${truncated}\n\`\`\`` },
-        }, { open: true })
+      } catch (err) {
+        api.notify('참조 오류: ' + err.message, 'error')
+        renderFileList(currentFiles, '오류 발생')
       }
-    } catch (err) {
-      renderFileList(currentFiles, `오류: ${err.message}`)
-      api.notify('파일 읽기 오류: ' + err.message, 'error')
+      return
+    }
+
+    if (action === 'prepare_drag') {
+      // 드래그 전 텍스트 파일 준비 (다음 드래그에서 사용 가능)
+      try {
+        const content = await exportAsText(token, file.id, file.mimeType)
+        const truncated = content.length > 20000 ? content.slice(0, 20000) + '\n\n...(내용이 잘렸습니다)' : content
+        fs.mkdirSync(GDRIVE_TMP_DIR, { recursive: true })
+        const safeName = file.name.replace(/[/\\:*?"<>|]/g, '_')
+        const tmpPath = path.join(GDRIVE_TMP_DIR, `${safeName}.md`)
+        fs.writeFileSync(tmpPath, truncated, 'utf8')
+        api.notify(`"${file.name}" 준비 완료 — 다시 드래그하세요`, 'info')
+        // dragReadyFileId/Path 업데이트
+        currentPanelData = { ...currentPanelData, dragReadyFileId: file.id, dragReadyPath: tmpPath }
+        api.updatePanel('file-list', { type: 'custom', data: currentPanelData }, {})
+      } catch (err) {
+        api.notify('파일 준비 오류: ' + err.message, 'error')
+      }
+      return
     }
   })
 
-  // ── 초기 로드 ──────────────────────────────────────────────
+  // 초기 로드
   const { clientId, clientSecret } = getCredentials()
-  if (!clientId || !clientSecret) {
-    showSetupGuide()
-    return
-  }
+  if (!clientId || !clientSecret) { showSetupGuide(); return }
 
   const accessToken = storage.get('access_token')
   const expiresAt = storage.get('expires_at') || 0
@@ -609,13 +599,11 @@ function activate(api) {
   if ((accessToken && Date.now() < expiresAt) || refreshToken) {
     loadFiles('')
   } else {
-    api.updatePanel('file-list', {
-      type: 'custom',
-      data: {
-        files: [{ id: 'auth', name: '🔐 Google 계정 연결이 필요합니다', badge: 'AUTH', meta: '클릭하면 브라우저에서 로그인합니다', action: 'auth' }],
-        status: '',
-      },
-    }, { open: true })
+    currentPanelData = {
+      files: [{ id: 'auth', name: '🔐 Google 계정 연결이 필요합니다', badge: 'AUTH', meta: '클릭하면 브라우저에서 로그인합니다', action: 'auth' }],
+      status: '',
+    }
+    api.updatePanel('file-list', { type: 'custom', data: currentPanelData }, { open: true })
   }
 }
 

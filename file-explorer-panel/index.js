@@ -11,6 +11,7 @@ const EXCLUDE = new Set([
 ])
 
 const PANEL_ID = 'explorer'
+const MAX_FILE_SIZE = 500 * 1024 // 500KB
 
 function buildTree(dirPath, expandedDirs) {
   function readDir(dir, depth) {
@@ -57,6 +58,7 @@ const ICON_FILE_CODE     = 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 
 const ICON_CHEVRON_RIGHT = 'M9 18l6-6-6-6'
 const ICON_CHEVRON_DOWN  = 'M6 9l6 6 6-6'
 const ICON_REFRESH       = 'M1 4v6h6M23 20v-6h-6M20.49 9A9 9 0 0 0 5.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 0 1 3.51 15'
+const ICON_X             = 'M18 6L6 18M6 6l12 12'
 
 function fileIcon(name, isDir, isExpanded) {
   const ext = name.split('.').pop().toLowerCase()
@@ -76,9 +78,77 @@ function flattenTree(nodes, result) {
   }
 }
 
+function FilePreviewModal({ preview, onClose }) {
+  const isImage = /\\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(preview.path)
+  const isBinary = preview.content === null
+
+  return React.createElement('div', {
+    onClick: onClose,
+    style: {
+      position: 'absolute', inset: 0, zIndex: 100,
+      background: 'rgba(0,0,0,0.6)',
+      display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+      padding: '16px',
+    }
+  },
+    React.createElement('div', {
+      onClick: (e) => e.stopPropagation(),
+      style: {
+        background: '#1a1a2e', border: '1px solid #2a2a3a', borderRadius: '8px',
+        display: 'flex', flexDirection: 'column',
+        width: '100%', maxHeight: '100%', overflow: 'hidden',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+      }
+    },
+      // 헤더
+      React.createElement('div', {
+        style: {
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '8px 10px', borderBottom: '1px solid #2a2a3a', flexShrink: 0,
+        }
+      },
+        React.createElement('span', {
+          style: { fontSize: '11px', color: '#aaaacc', fontFamily: "monospace", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }
+        }, preview.path),
+        React.createElement('button', {
+          onClick: onClose,
+          style: { background: 'none', border: 'none', cursor: 'pointer', color: '#666688', padding: '2px', borderRadius: '3px', flexShrink: 0, marginLeft: '8px', display: 'flex' },
+          onMouseEnter: (e) => { e.currentTarget.style.color = '#ccccee'; e.currentTarget.style.background = '#2a2a3a' },
+          onMouseLeave: (e) => { e.currentTarget.style.color = '#666688'; e.currentTarget.style.background = 'none' },
+        },
+          React.createElement(SvgIcon, { d: ICON_X, size: 14 })
+        )
+      ),
+      // 콘텐츠
+      React.createElement('div', {
+        style: { flex: 1, overflow: 'auto', padding: '12px' }
+      },
+        isBinary
+          ? React.createElement('div', { style: { color: '#666688', fontSize: '12px', textAlign: 'center', padding: '24px' } }, '바이너리 파일은 미리볼 수 없습니다')
+          : isImage
+            ? React.createElement('img', { src: 'file://' + preview.path, style: { maxWidth: '100%', display: 'block' } })
+            : React.createElement('pre', {
+                style: {
+                  margin: 0, fontSize: '11px', lineHeight: '1.6',
+                  color: '#ccccee', fontFamily: "'SF Mono', Menlo, monospace",
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                }
+              }, preview.content)
+      )
+    )
+  )
+}
+
 return function FileExplorer({ data, onAction }) {
   const projects = data && data.projects ? data.projects : []
+  const filePreview = data && data.filePreview ? data.filePreview : null
   const [activeIdx, setActiveIdx] = useState(0)
+  const [preview, setPreview] = useState(null)
+
+  // filePreview가 업데이트되면 모달 열기
+  React.useEffect(() => {
+    if (filePreview) setPreview(filePreview)
+  }, [filePreview && filePreview.path, filePreview && filePreview.ts])
 
   // projects가 바뀌면 activeIdx가 범위를 벗어나지 않도록 보정
   const safeIdx = projects.length === 0 ? 0 : Math.min(activeIdx, projects.length - 1)
@@ -88,8 +158,11 @@ return function FileExplorer({ data, onAction }) {
 
   function handleRefresh() { onAction('refresh', { cwd: current && current.cwd }) }
   function handleNodeClick(node) {
-    if (!node.isDir) return
-    onAction('expand', { id: node.id, cwd: current && current.cwd })
+    if (node.isDir) {
+      onAction('expand', { id: node.id, cwd: current && current.cwd })
+    } else {
+      onAction('open_file', { id: node.id, cwd: current && current.cwd })
+    }
   }
   function handleDragStart(e, node) {
     if (node.isDir) { e.preventDefault(); return }
@@ -97,7 +170,10 @@ return function FileExplorer({ data, onAction }) {
     e.dataTransfer.setData('text/plain', '@' + node.id + ' ')
   }
 
-  return React.createElement('div', { style: { flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' } },
+  return React.createElement('div', { style: { flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', position: 'relative' } },
+
+    // ── 파일 미리보기 모달 ────────────────────────────────────────────────
+    preview && React.createElement(FilePreviewModal, { preview, onClose: () => setPreview(null) }),
 
     // ── 탭바 (프로젝트 2개 이상일 때만 표시) ──────────────────────────────
     projects.length > 1 && React.createElement('div', {
@@ -164,12 +240,12 @@ return function FileExplorer({ data, onAction }) {
               draggable: !node.isDir,
               onClick: () => handleNodeClick(node),
               onDragStart: (e) => handleDragStart(e, node),
-              title: node.isDir ? node.name : node.id + ' (터미널에 드래그하여 참조)',
+              title: node.isDir ? node.name : node.id + ' (클릭하여 미리보기, 드래그하여 터미널 참조)',
               style: {
                 display: 'flex', alignItems: 'center', gap: '5px',
                 paddingTop: '2px', paddingBottom: '2px',
                 paddingLeft: paddingLeft + 'px', paddingRight: '8px',
-                cursor: node.isDir ? 'pointer' : 'grab', userSelect: 'none',
+                cursor: node.isDir ? 'pointer' : 'pointer', userSelect: 'none',
               },
               onMouseEnter: (e) => { e.currentTarget.style.background = '#1e1e30' },
               onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent' },
@@ -194,6 +270,7 @@ function activate(api) {
   // cwd → { expandedDirs: Set }
   const cwdState = new Map()
   let currentCwds = []
+  let currentFilePreview = null
 
   // 패널 1개만 등록 (고정 id)
   api.registerPanel({
@@ -217,7 +294,7 @@ function activate(api) {
       const state = getOrCreateState(cwd)
       return { cwd, tree: buildTree(cwd, state.expandedDirs) }
     })
-    api.updatePanel(PANEL_ID, { type: 'custom', data: { projects } }, {})
+    api.updatePanel(PANEL_ID, { type: 'custom', data: { projects, filePreview: currentFilePreview } }, {})
   }
 
   api.onHook('ActiveSessionChanged', (event) => {
@@ -225,7 +302,7 @@ function activate(api) {
     if (cwds.length === 0) return
 
     currentCwds = cwds
-    // 새 cwd는 state 초기화
+    currentFilePreview = null
     for (const cwd of cwds) getOrCreateState(cwd)
 
     api.showPanel(PANEL_ID)
@@ -236,19 +313,35 @@ function activate(api) {
     if (event.pluginId !== 'file-explorer-panel') return
 
     const { action, payload } = event
-    // payload.cwd로 어느 프로젝트인지 특정
     const cwd = payload && payload.cwd ? payload.cwd : currentCwds[0]
     if (!cwd) return
 
     const state = getOrCreateState(cwd)
 
     if (action === 'refresh') {
+      currentFilePreview = null
       flushPanel()
       return
     }
 
     const nodeId = payload && payload.id ? payload.id : event.rowId
     if (!nodeId) return
+
+    if (action === 'open_file') {
+      try {
+        const stat = fs.statSync(nodeId)
+        if (stat.size > MAX_FILE_SIZE) {
+          currentFilePreview = { path: nodeId, content: null, ts: Date.now() }
+        } else {
+          const content = fs.readFileSync(nodeId, 'utf8')
+          currentFilePreview = { path: nodeId, content, ts: Date.now() }
+        }
+      } catch {
+        currentFilePreview = { path: nodeId, content: '파일을 읽을 수 없습니다.', ts: Date.now() }
+      }
+      flushPanel()
+      return
+    }
 
     if (action === 'expand') {
       if (state.expandedDirs.has(nodeId)) {
