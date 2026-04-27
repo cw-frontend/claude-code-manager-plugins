@@ -6,7 +6,12 @@ const fs = require('fs')
 const path = require('path')
 const { execFileSync } = require('child_process')
 
-const GDRIVE_TMP_DIR = '/tmp/claude-gdrive'
+const GDRIVE_CACHE_DIR = require('os').homedir() + '/.claude-code-manager/gdrive-cache'
+
+function exportExt(mimeType) {
+  if (mimeType === 'application/vnd.google-apps.spreadsheet') return '.csv'
+  return '.txt'
+}
 
 // ─── OAuth2 설정 ──────────────────────────────────────────────────────────────
 
@@ -544,9 +549,9 @@ function activate(api) {
         renderFileList(currentFiles, `"${file.name}" 준비 중...`)
         const content = await exportAsText(token, file.id, file.mimeType)
         const truncated = content.length > 20000 ? content.slice(0, 20000) + '\n\n...(내용이 잘렸습니다)' : content
-        fs.mkdirSync(GDRIVE_TMP_DIR, { recursive: true })
+        fs.mkdirSync(GDRIVE_CACHE_DIR, { recursive: true })
         const safeName = file.name.replace(/[/\\:*?"<>|]/g, '_')
-        const tmpPath = path.join(GDRIVE_TMP_DIR, `${safeName}.md`)
+        const tmpPath = path.join(GDRIVE_CACHE_DIR, safeName + exportExt(file.mimeType))
         fs.writeFileSync(tmpPath, truncated, 'utf8')
         api.ptyWrite(`@${tmpPath} `)
         api.notify(`"${file.name}" 터미널에 참조 추가`, 'info')
@@ -563,9 +568,9 @@ function activate(api) {
       try {
         const content = await exportAsText(token, file.id, file.mimeType)
         const truncated = content.length > 20000 ? content.slice(0, 20000) + '\n\n...(내용이 잘렸습니다)' : content
-        fs.mkdirSync(GDRIVE_TMP_DIR, { recursive: true })
+        fs.mkdirSync(GDRIVE_CACHE_DIR, { recursive: true })
         const safeName = file.name.replace(/[/\\:*?"<>|]/g, '_')
-        const tmpPath = path.join(GDRIVE_TMP_DIR, `${safeName}.md`)
+        const tmpPath = path.join(GDRIVE_CACHE_DIR, safeName + exportExt(file.mimeType))
         fs.writeFileSync(tmpPath, truncated, 'utf8')
         api.notify(`"${file.name}" 준비 완료 — 다시 드래그하세요`, 'info')
         // dragReadyFileId/Path 업데이트
