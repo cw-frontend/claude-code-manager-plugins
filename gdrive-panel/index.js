@@ -297,10 +297,6 @@ return function GDriveFileList({ data, onAction }) {
         onClick: () => onAction('auth'), title: '재인증',
         style: { background: 'none', border: '1px solid #3a3a4a', borderRadius: '4px', color: '#555577', fontSize: '10px', padding: '3px 6px', cursor: 'pointer' },
       }, '🔄'),
-      React.createElement('button', {
-        onClick: () => onAction('logout'), title: '로그아웃',
-        style: { background: 'none', border: '1px solid #3a3a4a', borderRadius: '4px', color: '#555577', fontSize: '10px', padding: '3px 6px', cursor: 'pointer' },
-      }, '⏏')
     ),
     // 상태 표시
     status && React.createElement('div', {
@@ -512,12 +508,6 @@ function activate(api) {
     if (action === 'open_settings') { api.requestSettings(); return }
     if (action === 'search') { await loadFiles((payload && payload.query) || ''); return }
     if (action === 'auth') { await startAuth(); return }
-    if (action === 'logout') {
-      storage.set('access_token', null); storage.set('refresh_token', null); storage.set('expires_at', 0)
-      renderFileList([], '로그아웃됨')
-      api.notify('Google Drive 로그아웃', 'info')
-      return
-    }
 
     if (!fileId) return
     const file = currentFiles.find((f) => f.id === fileId)
