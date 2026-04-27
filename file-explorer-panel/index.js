@@ -3,9 +3,6 @@
 const fs = require('fs')
 const path = require('path')
 
-const PANEL_ID = 'explorer'
-
-// 기본 제외 목록 (lazy loading이라도 목록 자체는 숨기는 게 U�)
 const EXCLUDE = new Set([
   'node_modules', '.git', '.next', '.nuxt', 'dist', 'build', 'out',
   'coverage', '.cache', '.turbo', '.parcel-cache', '__pycache__',
@@ -13,7 +10,6 @@ const EXCLUDE = new Set([
   'vendor', '.DS_Store', 'Thumbs.db',
 ])
 
-// 파일 확장자 → lucide 아이콘 이름
 function fileIconName(name, isDir, isExpanded) {
   if (isDir) return isExpanded ? 'folder-open' : 'folder'
   const ext = path.extname(name).toLowerCase()
@@ -36,56 +32,42 @@ function fileIconName(name, isDir, isExpanded) {
   return icons[ext] ?? 'file'
 }
 
+/** cwd → 패널 id */
+function cwdToPanelId(cwd) {
+  return 'explorer::' + cwd.replace(/[^a-zA-Z0-9_-]/g, '_')
+}
+
+/** cwd → 패널 타이틀 */
+function cwdToTitle(cwd) {
+  return path.basename(cwd)
+}
+
 function activate(api) {
-  // 세션별 루트 경로 (ActiveSessionChanged 로 갱신)
-  let currentRoot = null
+  // 등록된 cwd Set
+  const registeredCwds = new Set()
 
-  // 현재 패널에 표시 중인 rows (expand/collapse 상태 관리용)
-  let currentRows = []
+  // cwd별 상태: { rows, expandedDirs }
+  const cwdState = new Map()
 
-  // 펼쳐진 디렉터리 경로 Set
-  const expandedDirs = new Set()
-
-  api.registerPanel({
-    id: PANEL_ID,
-    type: 'table',
-    title: 'File Explorer',
-    icon: 'folder',
-    defaultWidth: 280,
-    minWidth: 200,
-    maxWidth: 600,
-  })
-
-  // 설치 즉시 아이콘바에 표시
-  api.updatePanel(PANEL_ID, {
-    type: 'table',
-    columns: [{ key: '_title', label: 'Name' }],
-    rows: [],
-    listMode: true,
-    status: '세션을 시작하면 파일 트리가 표시됩니다',
-  }, { open: true })
-
-  // rows를 패널에 반영
-  function flush(open) {
-    api.updatePanel(PANEL_ID, {
-      type: 'table',
-      columns: [
-        { key: '_title', label: 'Name' },
-        { key: '_badge', label: '', width: 48, align: 'right' },
-      ],
-      rows: currentRows,
-      listMode: true,
-      status: currentRoot ? path.basename(currentRoot) : '',
-    }, open ? { open: true } : {})
+  function ensurePanel(cwd) {
+    const panelId = cwdToPanelId(cwd)
+    if (!registeredCwds.has(cwd)) {
+      registeredCwds.add(cwd)
+      cwdState.set(cwd, { expandedDirs: new Set() })
+      api.registerPanel({
+        id: panelId,
+        type: 'table',
+        title: cwdToTitle(cwd),
+        icon: 'folder',
+        defaultWidth: 280,
+        minWidth: 200,
+        maxWidth: 600,
+      })
+    }
+    return panelId
   }
 
-  // 루트부터 전체 rows 재구성 (expandedDirs 상태 반영)
-  function rebuildRows(root) {
-    currentRows = buildRows(root, 0)
-  }
-
-  // 재귀적으로 rows 빌드 (expandedDirs에 있는 디렉터리는 자식 포함)
-  function buildRows(dirPath, depth) {
+  function buildRows(dirPath, depth, expandedDirs) {
     const rows = []
     let entries
     try {
@@ -115,64 +97,103 @@ function activate(api) {
         _depth: depth.toString(),
       })
 
-      // 펼쳐진 디렉터리면 자식 재귀 삽입
       if (isDir && isExpanded) {
-        rows.push(...buildRows(fullPath, depth + 1))
+        rows.push(...buildRows(fullPath, depth + 1, expandedDirs))
       }
     }
     return rows
   }
 
-  // 세션 전환 시 루트 갱신
+  function flushPanel(cwd, open) {
+    const panelId = cwdToPanelId(cwd)
+    const state = cwdState.get(cwd)
+    if (!state) return
+    const rows = buildRows(cwd, 0, state.expandedDirs)
+    api.updatePanel(panelId, {
+      type: 'table',
+      columns: [
+        { key: '_title', label: 'Name' },
+      ],
+      rows,
+      listMode: true,
+      status: cwdToTitle(cwd),
+    }, open ? { open: true } : {})
+  }
+
+  // 세션 전환: 현재 세션 cwd 패널만 show, 나머지 hide
   api.onHook('ActiveSessionChanged', (event) => {
     const cwds = Array.isArray(event.cwds) ? event.cwds : (event.cwd ? [event.cwd] : [])
     if (cwds.length === 0) return
 
-    const root = cwds[0]
-    if (root === currentRoot) return
+    const activeCwds = new Set(cwds)
 
-    currentRoot = root
-    expandedDirs.clear()
-    rebuildRows(root)
-    flush(true)
+    // 비활성 패널 hide
+    for (const cwd of registeredCwds) {
+      if (!activeCwds.has(cwd)) {
+        api.hidePanel(cwdToPanelId(cwd))
+      }
+    }
+
+    // 활성 cwd 패널 갱신 및 show
+    for (const cwd of cwds) {
+      ensurePanel(cwd)
+      flushPanel(cwd, true)
+    }
   })
 
-  // Claude가 파일을 읽거나 수정하면 트리 갱신 (구조 변경 반영)
+  // 파일 수정 후 현재 활성 패널 갱신
   api.onHook('PostToolUse', (event) => {
-    if (!currentRoot) return
     const tool = event.tool_name
     if (!['Read', 'Write', 'Edit', 'MultiEdit', 'Bash'].includes(tool)) return
 
-    // 파일 생성/삭제가 있을 수 있으므로 rows 재빌드
-    rebuildRows(currentRoot)
-    flush(false)
+    const filePath = event.tool_input?.file_path || null
+    const rawCwd = filePath ? path.dirname(filePath) : (event.tool_input?.cwd || null)
+
+    if (rawCwd) {
+      // 해당 파일이 속한 등록된 cwd 찾기
+      for (const cwd of registeredCwds) {
+        if (rawCwd.startsWith(cwd)) {
+          flushPanel(cwd, false)
+          break
+        }
+      }
+    } else {
+      // cwd 모를 때 등록된 모든 패널 갱신
+      for (const cwd of registeredCwds) {
+        flushPanel(cwd, false)
+      }
+    }
   })
 
-  // 행 클릭 이벤트 (PluginAction 훅)
+  // 행 클릭 (PluginAction)
   api.onHook('PluginAction', (event) => {
     if (event.pluginId !== 'file-explorer-panel') return
-    if (event.panelId !== PANEL_ID) return
+
+    // event.panelId는 local id (예: "explorer::_Users_foo_project")
+    const cwd = Array.from(registeredCwds).find(
+      (c) => cwdToPanelId(c) === event.panelId
+    )
+    if (!cwd) return
+
+    const state = cwdState.get(cwd)
+    if (!state) return
 
     const fullPath = event.rowId
     if (!fullPath) return
 
     if (event.action === 'expand') {
-      // 토글: 펼쳐져 있으면 접기, 아니면 펼치기
-      if (expandedDirs.has(fullPath)) {
-        // 이 경로와 하위 경로 모두 제거
-        for (const p of expandedDirs) {
+      if (state.expandedDirs.has(fullPath)) {
+        for (const p of state.expandedDirs) {
           if (p === fullPath || p.startsWith(fullPath + path.sep)) {
-            expandedDirs.delete(p)
+            state.expandedDirs.delete(p)
           }
         }
       } else {
-        expandedDirs.add(fullPath)
+        state.expandedDirs.add(fullPath)
       }
-      rebuildRows(currentRoot)
-      flush(false)
+      flushPanel(cwd, false)
     } else if (event.action === 'open') {
-      // 파일은 알림만 (향후 에디터 연동 등 확장 가능)
-      api.notify(path.relative(currentRoot, fullPath), 'info')
+      api.notify(path.relative(cwd, fullPath), 'info')
     }
   })
 }
