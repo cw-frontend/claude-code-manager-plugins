@@ -112,11 +112,11 @@ function activate(api) {
 
   // 루트부터 전체 rows 재구성 (expandedDirs 상태 반영)
   function rebuildRows(root) {
-    currentRows = buildRows(root, '', 0)
+    currentRows = buildRows(root, 0)
   }
 
   // 재귀적으로 rows 빌드 (expandedDirs에 있는 디렉터리는 자식 포함)
-  function buildRows(dirPath, prefix, depth) {
+  function buildRows(dirPath, depth) {
     const rows = []
     let entries
     try {
@@ -136,12 +136,11 @@ function activate(api) {
       const isDir = e.isDirectory()
       const fullPath = path.join(dirPath, e.name)
       const isExpanded = expandedDirs.has(fullPath)
-      const indent = '  '.repeat(depth)
       const expandMark = isDir ? (isExpanded ? '▾ ' : '▸ ') : '  '
 
       rows.push({
         _id: fullPath,
-        _title: indent + expandMark + fileIcon(e.name, isDir) + ' ' + e.name,
+        _title: expandMark + fileIcon(e.name, isDir) + ' ' + e.name,
         _badge: isDir ? (isExpanded ? 'open' : 'dir') : (path.extname(e.name).slice(1) || 'file'),
         action: isDir ? 'expand' : 'open',
         _isDir: isDir ? 'true' : 'false',
@@ -150,7 +149,7 @@ function activate(api) {
 
       // 펼쳐진 디렉터리면 자식 재귀 삽입
       if (isDir && isExpanded) {
-        rows.push(...buildRows(fullPath, prefix + '  ', depth + 1))
+        rows.push(...buildRows(fullPath, depth + 1))
       }
     }
     return rows
